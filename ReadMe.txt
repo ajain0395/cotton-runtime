@@ -1,6 +1,5 @@
-﻿Assignment 2 
-Ashish Jain & Sarosh Hasan
-(MT18052 & MT18084)
+﻿Ashish Jain
+(MT18052)
 
 
 Step to execute the program 1 & 2 -
