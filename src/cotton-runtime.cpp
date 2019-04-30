@@ -6,20 +6,22 @@
 #include <pthread.h>
 #include <stdlib.h>
 
+#include <unistd.h>
+
 #define DEQ_SIZE 10000
 
 namespace cotton{
 
     typedef struct _thread_key_data_
     {
-        int index;
+       volatile int index;
     }thread_data_t;
 
 
     typedef struct _thread_deq_
     {
        volatile int front;
-        void **deq;
+       void **deq;
        volatile int rear;
     }thread_deq_t;
 
@@ -36,7 +38,7 @@ namespace cotton{
     pthread_t *threads; //number of threads
     pthread_mutex_t mutexfinish,*mutexlocks; //locks for each task pool bucket
     thread_data_t *deqindex ; // index of each thread for worker routine key deq mapping
-    thread_deq_t *threads_queues ;//threads deques
+    volatile thread_deq_t *threads_queues ;//threads deques
     pthread_key_t key;//keys for for all thread specific index fetching
     static pthread_once_t key_once = PTHREAD_ONCE_INIT;
     volatile int finish_counter = 0;//counter for task remaining in queues
@@ -76,7 +78,7 @@ namespace cotton{
         else
         { 
             threads_queues[index].deq[threads_queues[index].rear + 1] = value;
-            threads_queues[index].rear++; 
+            threads_queues[index].rear++;
         }
        // unlock_deq(index);
     }
@@ -89,13 +91,14 @@ namespace cotton{
         lock_deq(index);
         if (isempty(index)) 
         { 
-            printf("\nQueue of thread[%d] is Empty", index);
+     //       printf("\nQueue of thread[%d] is Empty", index);
             unlock_deq(index);
             return NULL; 
         }
 
-        void *data = threads_queues[index].deq[threads_queues[index].front]; 
-        threads_queues[index].deq[threads_queues[index].front] = NULL; 
+        void *data = threads_queues[index].deq[threads_queues[index].front];
+        threads_queues[index].deq[threads_queues[index].front] = NULL;
+        threads_queues[index].front++;
     /*    if (threads_queues[index].front == threads_queues[index].rear) 
         { 
             threads_queues[index].front = -1; 
@@ -105,7 +108,7 @@ namespace cotton{
             threads_queues[index].front = 0; 
         else*/
 
-        threads_queues[index].front++; 
+
 
         unlock_deq(index);
         return data; 
@@ -119,28 +122,41 @@ namespace cotton{
         lock_deq(index);//lock thread deq from access
         if (isempty(index))
         { 
-            printf("\nQueue of thread[%d] is Empty", index);//if deq is empty message
+       //     printf("\nQueue of thread[%d] is Empty", index);//if deq is empty message
             unlock_deq(index);
             return NULL; 
-        } 
+        }
 
-        void *data = threads_queues[index].deq[threads_queues[index].rear]; 
-        threads_queues[index].deq[threads_queues[index].rear] = NULL; 
-        if (threads_queues[index].front == threads_queues[index].rear)
+
+        void *data = threads_queues[index].deq[threads_queues[index].rear ];
+        threads_queues[index].deq[threads_queues[index].rear] = NULL;
+       if (threads_queues[index].front == threads_queues[index].rear)
         { 
             threads_queues[index].front = -1;
             threads_queues[index].rear = -1; 
-        } 
+        }
+
         /*
         else if (threads_queues[index].rear == 0) 
             threads_queues[index].rear = DEQ_SIZE - 1; 
         */
+
         else
-            threads_queues[index].rear--;
+           threads_queues[index].rear--;
 
         unlock_deq(index);
         return data; 
 
+    }
+
+    int bind_thread_to_core(int worker_id) {
+        int num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+        int core_id = worker_id % num_cores;
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(core_id, &cpuset);
+        pthread_t current_thread = pthread_self();
+        return pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset);
     }
 
     /*
@@ -175,6 +191,7 @@ namespace cotton{
             int *val = (int*)malloc(sizeof(int));
             *val = size -1;
             setspecific(val);//set thread specific data to key
+            bind_thread_to_core(size - 1);
         }
     }
 
@@ -218,12 +235,9 @@ namespace cotton{
         lock_finish();
         finish_counter++;//concurrent access
         unlock_finish();
-        //task size retrieval
-        int task_size = sizeof(lambda);
-        //copy	task	on	heap
-        void *p =(void*)malloc(task_size);
-        memcpy(p,&lambda,task_size);
-        //thread-safe	push_task_to_runtime
+
+        void *p = (void *)new std::function<void()>(lambda);
+
         //index of shelf
         push_task_to_runtime(p,index);
         return;
@@ -243,14 +257,18 @@ namespace cotton{
         }
     }
 
+
+
     /*
        worker routine:
        task to be performed by every thread
        */
+
     void *worker_routine(void *indexdata)
     {
 
         thread_data_t *data = (thread_data_t*)indexdata;
+        bind_thread_to_core(data->index);
         if (getspecific() == NULL) 
         {
             int *val;
@@ -342,7 +360,8 @@ namespace cotton{
         if(task	!=	NULL)
         {
             execute_task(task);
-            free(task);
+            //free(task);
+            delete task;
             task = NULL;
             lock_finish();
             finish_counter--;
@@ -354,8 +373,6 @@ namespace cotton{
     {
         (*(std::function<void()> *)task) ();
 
-        //   *((sigrout_t*) task) ();
-        //  task();
     }
 
     int thread_pool_size()
