@@ -1,5 +1,4 @@
-﻿Assignment 2 
-Ashish Jain
+﻿Ashish Jain
 (MT18052 )
 
 
